@@ -1,0 +1,16 @@
+pandas>=2.0
+pyarrow
+pydantic>=2
+python-dotenv
+
+[dev]
+hypothesis
+pytest>=7.0
+pytest-cov
+ruff>=0.2.0
+pre-commit
+
+[jupyter]
+jupyter
+seaborn
+ipykernel
