@@ -116,8 +116,9 @@ class ScenarioStore:
                 
                 print(f"  DEBUG: Starting to process {len(parsed.get('inputs', []))} parsed inputs")
                 
-                # First pass: collect all L1a values to sum them
+                # First pass: collect all L1a values and Schedule E L26 values to sum them
                 l1a_values = []
+                schedule_e_l26_values = []
                 other_inputs = []
                 for inp in parsed.get("inputs", []):
                     form_name = inp.get("form", "")
@@ -129,10 +130,18 @@ class ScenarioStore:
                     if form_name == "Form 1040" and line_id == "L1a" and isinstance(value, (int, float)):
                         l1a_values.append(value)
                         print(f"  DEBUG: Found L1a value: ${value:,.0f} (total L1a values so far: {len(l1a_values)})")
+                    # Collect Schedule E L26 values separately for summing (fallback for backward compatibility)
+                    # NOTE: Property-specific lines (4_A, 4_B, 4_C) are preferred and preserve values separately
+                    # L26 is the total line - if multiple L26 values are provided, sum them as a fallback
+                    elif form_name == "Schedule E" and line_id == "L26" and isinstance(value, (int, float)):
+                        schedule_e_l26_values.append(value)
+                        print(f"  DEBUG: Found Schedule E L26 value: ${value:,.0f} (total L26 values so far: {len(schedule_e_l26_values)})")
+                        print(f"  NOTE: Consider using property-specific lines (4_A, 4_B, 4_C) instead of L26 to preserve values separately")
                     else:
                         other_inputs.append(inp)
                 
                 print(f"  DEBUG: Collected {len(l1a_values)} L1a values: {l1a_values}")
+                print(f"  DEBUG: Collected {len(schedule_e_l26_values)} Schedule E L26 values: {schedule_e_l26_values}")
                 
                 # Sum all L1a values
                 if l1a_values:
@@ -146,11 +155,26 @@ class ScenarioStore:
                 else:
                     print(f"  DEBUG: No L1a values found to sum")
                 
-                # Process other inputs
+                # Sum all Schedule E L26 values
+                if schedule_e_l26_values:
+                    total_l26 = sum(schedule_e_l26_values)
+                    print(f"  NOTE: Summing {len(schedule_e_l26_values)} Schedule E L26 values: {[f'${v:,.0f}' for v in schedule_e_l26_values]} = ${total_l26:,.0f}")
+                    scenario.inputs[("Schedule E", "L26")] = total_l26
+                    print(f"  DEBUG: Set scenario.inputs[('Schedule E', 'L26')] = ${total_l26:,.0f}")
+                else:
+                    print(f"  DEBUG: No Schedule E L26 values found to sum")
+                
+                # Process other inputs (skip L1a and Schedule E L26 since we already handled them)
                 for inp in other_inputs:
                     form_name = inp["form"]
                     line_id = inp["line"]
                     value = inp["value"]
+                    # Skip L1a (already summed above)
+                    if form_name == "Form 1040" and line_id == "L1a":
+                        continue
+                    # Skip Schedule E L26 (already summed above)
+                    if form_name == "Schedule E" and line_id == "L26":
+                        continue
                     # Skip clearly derived or non-numeric downstream fields that
                     # should be computed by OTS (e.g., QBI deduction on 1040 L13).
                     # OpenAI sometimes returns a symbolic value like "QBI Deduction"
@@ -322,6 +346,17 @@ class ScenarioStore:
                 if isinstance(existing_value, (int, float)) and isinstance(value, (int, float)):
                     scenario.inputs[key] = existing_value + value
                     print(f"  NOTE: Summing L1a values: ${existing_value:,.0f} + ${value:,.0f} = ${existing_value + value:,.0f}")
+                else:
+                    # If value is explicitly None or empty string for removal, delete the key
+                    if value is None or (isinstance(value, str) and value.lower() in ['none', 'null', 'remove', 'delete', '']):
+                        scenario.inputs.pop(key, None)
+            # Special handling: Sum Schedule E L26 values when multiple are provided
+            # (e.g., S-Corp distributions + rental income)
+            elif form == "Schedule E" and line == "L26":
+                existing_value = scenario.inputs.get(key, 0)
+                if isinstance(existing_value, (int, float)) and isinstance(value, (int, float)):
+                    scenario.inputs[key] = existing_value + value
+                    print(f"  NOTE: Summing Schedule E L26 values: ${existing_value:,.0f} + ${value:,.0f} = ${existing_value + value:,.0f}")
                 else:
                     # If value is explicitly None or empty string for removal, delete the key
                     if value is None or (isinstance(value, str) and value.lower() in ['none', 'null', 'remove', 'delete', '']):

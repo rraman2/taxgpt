@@ -204,8 +204,9 @@ def calculate_tax(scenario_id):
                 # Clear existing inputs and apply new ones
                 scenario.inputs.clear()
                 
-                # First pass: collect all L1a values to sum them
+                # First pass: collect all L1a values and Schedule E L26 values to sum them
                 l1a_values = []
+                schedule_e_l26_values = []
                 other_inputs = []
                 for inp in parsed.get("inputs", []):
                     form_name = inp["form"]
@@ -215,6 +216,10 @@ def calculate_tax(scenario_id):
                     if form_name == "Form 1040" and line_id == "L1a" and isinstance(value, (int, float)):
                         l1a_values.append(value)
                         print(f"  DEBUG: Found L1a value in calculate_tax: ${value:,.0f}")
+                    # Collect Schedule E L26 values separately for summing
+                    elif form_name == "Schedule E" and line_id == "L26" and isinstance(value, (int, float)):
+                        schedule_e_l26_values.append(value)
+                        print(f"  DEBUG: Found Schedule E L26 value in calculate_tax: ${value:,.0f}")
                     else:
                         other_inputs.append(inp)
                 
@@ -225,12 +230,36 @@ def calculate_tax(scenario_id):
                     scenario.inputs[("Form 1040", "L1a")] = total_l1a
                     print(f"  DEBUG: Set scenario.inputs[('Form 1040', 'L1a')] = ${total_l1a:,.0f}")
                 
-                # Process other inputs
+                # Sum all Schedule E L26 values
+                if schedule_e_l26_values:
+                    total_l26 = sum(schedule_e_l26_values)
+                    print(f"  NOTE: Summing {len(schedule_e_l26_values)} Schedule E L26 values in calculate_tax: {[f'${v:,.0f}' for v in schedule_e_l26_values]} = ${total_l26:,.0f}")
+                    scenario.inputs[("Schedule E", "L26")] = total_l26
+                    print(f"  DEBUG: Set scenario.inputs[('Schedule E', 'L26')] = ${total_l26:,.0f}")
+                
+                # Process other inputs (skip L1a and Schedule E L26 since we already handled them)
+                openai_inputs = []  # Store all OpenAI inputs for QBI detection
                 for inp in other_inputs:
                     form_name = inp["form"]
                     line_id = inp["line"]
                     value = inp["value"]
+                    # Skip L1a (already summed above)
+                    if form_name == "Form 1040" and line_id == "L1a":
+                        continue
+                    # Skip Schedule E L26 (already summed above)
+                    if form_name == "Schedule E" and line_id == "L26":
+                        continue
                     scenario.inputs[(form_name, line_id)] = value
+                    openai_inputs.append(inp)
+                
+                # Also add L1a and Schedule E L26 inputs to openai_inputs for QBI detection
+                for inp in parsed.get("inputs", []):
+                    if (inp.get("form") == "Form 1040" and inp.get("line") == "L1a") or \
+                       (inp.get("form") == "Schedule E" and inp.get("line") == "L26"):
+                        openai_inputs.append(inp)
+                
+                # Store OpenAI inputs for QBI detection (same as core.py)
+                setattr(scenario, "_openai_inputs", openai_inputs)
                 
                 # Store in history
                 scenario.history.append(dict(scenario.inputs))

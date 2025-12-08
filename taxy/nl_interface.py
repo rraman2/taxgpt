@@ -68,14 +68,26 @@ For example, if I gave you a wage income of 280,000, you will map it to **Form 1
 
 7. **Common Income Types:**
    - "Wage income", "W2 income", "salary" → form: "Form 1040", line: "L1a"
+   - **CRITICAL - Filer/Spouse Attribution for Wage Income:**
+     * If the input explicitly states "Filer has a wage income" or "Spouse has a wage income", you MUST preserve this information in the "fact" field
+     * Example: "Filer has a wage income of $120K" → form: "Form 1040", line: "L1a", value: 120000, fact: "Filer has a wage income of $120,000" (preserve "Filer" in fact)
+     * Example: "Spouse has a wage income of $180K" → form: "Form 1040", line: "L1a", value: 180000, fact: "Spouse has a wage income of $180,000" (preserve "Spouse" in fact)
+     * This information is critical for accurate self-employment tax calculations
    - **S-Corp wages**: "S-Corp wage", "S Corp wage", "Scorp wage", "wage from S-Corp", "wage from S Corp", "wage from Scorp" → form: "Form 1040", line: "L1a" (S-Corp wages are W-2 wages and should be added to L1a)
    - "Taxable interest income", "interest income" → form: "Schedule 1", line: "S1_1"
    - "Business income", "Schedule C income", "self-employment income" → form: "Schedule C", line: "L31" (if net profit) or individual Schedule C lines
+   - **CRITICAL - Filer/Spouse Attribution for Schedule C:**
+     * If the input explicitly states "Filer has a Schedule C" or "Spouse has a Schedule C", you MUST preserve this information in the "fact" field
+     * Example: "Spouse has a Schedule C net income of $64,000" → form: "Schedule C", line: "L31", value: 64000, fact: "Spouse's Schedule C net income of $64,000" (preserve "Spouse" in fact)
+     * Example: "Filer has a Schedule C net income of $50,000" → form: "Schedule C", line: "L31", value: 50000, fact: "Filer's Schedule C net income of $50,000" (preserve "Filer" in fact)
+     * This information is critical for accurate self-employment tax calculations (which spouse's W-2 wages to use for wage base calculation)
    - "Qualified business income", "QBI", "qualified business", "is a qualified business" → form: "Schedule C", line: "L31" 
    - **IMPORTANT**: If a business is qualified for QBI deduction, the QBI deduction (typically 20% of qualified business income) should be calculated and entered on Form 1040, line: "L13"
    - Note: QBI deduction calculation is complex and may require Form 8995. For now, if "qualified business" is mentioned, map Schedule C L31 and note that QBI deduction may apply.
-   - "Rental income", "net rental income", "rental property income" → form: "Schedule E", line: "L26"
-   - **S-Corp distributions**: "S-Corp distribution", "S Corp distribution", "Scorp distribution", "distribution from S-Corp", "distribution from S Corp", "distribution from Scorp" → form: "Schedule E", line: "L26" (S-Corp distributions flow through Schedule E, line 26, which then flows to Schedule 1, line 5 (S1_5))
+   - **Rental income**: "rental income", "net rental income", "rental property income" → form: "Schedule E", line: "4_A" or "L4_A" (rents received for property A - the first rental property). Schedule E supports multiple properties (A, B, C), so use "4_A" for the first rental property, "4_B" for the second, etc.
+   - **Rental depreciation**: "rental depreciation", "depreciation on rental property", "rental property depreciation", "depreciation expense for rental" → form: "Schedule E", line: "18_A" or "L18_A" (depreciation for property A - the first rental property). Use "18_B" for the second property, "18_C" for the third.
+   - **S-Corp distributions**: "S-Corp distribution", "S Corp distribution", "Scorp distribution", "distribution from S-Corp", "distribution from S Corp", "distribution from Scorp" → form: "Schedule E", line: "4_B" or "L4_B" (royalties/rents for property B - S-Corp distributions are typically reported as royalties/rents on Schedule E). If there's already a rental property on property A, use property B for S-Corp distributions to preserve them separately.
+   - **Note**: Schedule E has property-specific lines (4_A, 4_B, 4_C for income; 18_A, 18_B, 18_C for depreciation). OTS will automatically calculate L26 (total net income/loss) from all properties. Use different property columns (A, B, C) to preserve separate income sources for advanced planning.
    - "Dividend income" → form: "Schedule 1", line: "S1_2a" or "S1_2b" (depending on qualified vs ordinary)
    - **Capital Gains (Schedule D - separate schedule on the tax return):**
      * Schedule D is a separate schedule on the tax return. Map capital gains to "Schedule D" with appropriate line identifiers:

@@ -147,31 +147,48 @@ class ScheduleCHandler(FormHandler):
             context["Schedule C"]["L31"] = net_income
 
             # Check if OpenAI indicated this is a "qualified business" (not a specified service trade or business)
+            # Also check if Schedule C belongs to spouse (for Schedule SE wage base calculation)
             # Look for keywords in the original OpenAI inputs
             form_inputs_dict = context.get("form_inputs", {})
             all_openai_inputs = form_inputs_dict.get("_all_inputs", [])
             
+            print(f"  Schedule C: Checking QBI qualification from {len(all_openai_inputs)} OpenAI inputs")
+            
             # Check if any OpenAI input for Schedule C mentioned "qualified business" or "QBI"
+            # Also check if Schedule C belongs to spouse
             is_qualified = False
             is_specified_service = None  # None = unknown, True = SSTB, False = qualified
+            belongs_to_spouse = False  # Track if Schedule C belongs to spouse
+            
             for inp in all_openai_inputs:
                 if inp.get("form") == "Schedule C":
                     fact = inp.get("fact", "").lower() if isinstance(inp.get("fact"), str) else ""
                     description = inp.get("description", "").lower() if isinstance(inp.get("description"), str) else ""
+                    print(f"  Schedule C: Checking input - fact: '{inp.get('fact', 'N/A')}', description: '{inp.get('description', 'N/A')}'")
+                    
+                    # Check if Schedule C belongs to spouse
+                    if "spouse" in fact or "spouse's" in fact:
+                        belongs_to_spouse = True
+                        print(f"  Schedule C: Detected as belonging to spouse from: {inp.get('fact', 'N/A')}")
+                    
                     if ("qualified business" in fact or "qbi" in fact or 
                         "qualified business" in description or "qbi" in description):
                         is_qualified = True
                         is_specified_service = False  # Qualified = NOT a specified service business
                         print(f"  Schedule C: OpenAI indicated 'qualified business' in: {inp.get('fact', 'N/A')}")
-                        break
+                        # Don't break - continue to check for spouse
                     elif "specified service" in fact or "sstb" in fact:
                         is_specified_service = True
                         print(f"  Schedule C: OpenAI indicated 'specified service business' in: {inp.get('fact', 'N/A')}")
-                        break
+                        # Don't break - continue to check for spouse
+            
+            if not all_openai_inputs:
+                print(f"  Schedule C: WARNING - No OpenAI inputs available for QBI detection")
             
             # Store flags - OTS/Form 8995 should handle QBI calculation automatically
             context["Schedule C"]["is_qualified"] = is_qualified
             context["Schedule C"]["is_specified_service"] = is_specified_service
+            context["Schedule C"]["belongs_to_spouse"] = belongs_to_spouse
 
             # Also stamp these onto the outputs dict so that when FormCoordinator
             # overwrites context['Schedule C'] with completed outputs, we don't
@@ -179,12 +196,14 @@ class ScheduleCHandler(FormHandler):
             outputs["L31"] = net_income
             outputs["is_qualified"] = is_qualified
             outputs["is_specified_service"] = is_specified_service
+            outputs["belongs_to_spouse"] = belongs_to_spouse
 
             # Debug: show how we're classifying this Schedule C business
             print(
                 "  Schedule C: QBI classification -> "
                 f"is_qualified={is_qualified}, "
                 f"is_specified_service={is_specified_service}, "
+                f"belongs_to_spouse={belongs_to_spouse}, "
                 f"context['Schedule C']={context.get('Schedule C')}"
             )
 
@@ -207,15 +226,37 @@ class ScheduleEHandler(FormHandler):
 
     @property
     def ots_form_id(self) -> str:
-        return "US_1040_Sched_E"
+        return "US_1040_Sched_E_brokerage_royalties"
+
+    def normalize_line_name(self, line: str) -> str:
+        """
+        Normalize Schedule E line names.
+        OTS expects property-specific lines like "18_A" (not "L18_A").
+        """
+        # Convert L18_A → 18_A, L4_A → 4_A, etc. for property-specific lines
+        if line.startswith("L") and "_" in line:
+            # Remove the "L" prefix for property-specific lines (e.g., L18_A → 18_A)
+            return line[1:]
+        return line
 
     def validate_line(self, line: str) -> bool:
         # Schedule E has lines like L1-L26
         # L26 is the net rental income/loss
+        # Also supports property-specific lines like 18_A (depreciation for property A)
         valid_lines = {
             "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9", "L10",
             "L11", "L12", "L13", "L14", "L15", "L16", "L17", "L18", "L19", "L20",
             "L21", "L22", "L23", "L24", "L25", "L26",
+            # Property-specific lines (for rental properties A, B, C)
+            "4_A", "L4_A",    # Rents/royalties received for property A
+            "4_B", "L4_B",    # Rents/royalties received for property B
+            "4_C", "L4_C",    # Rents/royalties received for property C
+            "18_A", "L18_A",  # Depreciation for property A
+            "18_B", "L18_B",  # Depreciation for property B
+            "18_C", "L18_C",  # Depreciation for property C
+            "19_A", "L19_A",  # Other expenses for property A
+            "19_B", "L19_B",  # Other expenses for property B
+            "19_C", "L19_C",  # Other expenses for property C
         }
         return line in valid_lines
 
@@ -225,6 +266,16 @@ class ScheduleEHandler(FormHandler):
         """Process Schedule E and flow net rental income (L26) to Schedule 1."""
         # Normalize inputs first
         normalized_inputs = self.normalize_inputs(inputs)
+        
+        # Debug: Show property-specific income lines (4_A, 4_B, 4_C)
+        for income_line in ["4_A", "4_B", "4_C"]:
+            if income_line in normalized_inputs:
+                print(f"  Schedule E: Property income {income_line} = ${normalized_inputs[income_line]:,.2f}")
+        
+        # Debug: Show depreciation if present
+        for dep_line in ["18_A", "18_B", "18_C"]:
+            if dep_line in normalized_inputs:
+                print(f"  Schedule E: Depreciation {dep_line} = ${normalized_inputs[dep_line]:,.2f}")
 
         # Call OTS for Schedule E
         try:
@@ -236,13 +287,51 @@ class ScheduleEHandler(FormHandler):
         except Exception as e:
             print(f"Warning: Schedule E evaluation failed: {e}")
             print(f"  Inputs were: {normalized_inputs}")
-            # If evaluation fails, try to use L26 directly if provided
-            if "L26" in normalized_inputs:
+            # If evaluation fails, calculate L26 from property-specific inputs
+            # Sum all property income lines (4_A, 4_B, 4_C) and subtract expenses
+            net_rental = 0
+            property_income = 0
+            property_expenses = 0
+            
+            # Sum property income (4_A, 4_B, 4_C)
+            for prop_income in ["4_A", "4_B", "4_C"]:
+                if prop_income in normalized_inputs:
+                    income_val = normalized_inputs[prop_income]
+                    property_income += income_val
+                    print(f"  Schedule E (fallback): Adding {prop_income} = ${income_val:,.2f}")
+            
+            # Sum property expenses (depreciation, other expenses)
+            for prop_exp in ["18_A", "18_B", "18_C", "19_A", "19_B", "19_C"]:
+                if prop_exp in normalized_inputs:
+                    exp_val = normalized_inputs[prop_exp]
+                    property_expenses += exp_val
+                    print(f"  Schedule E (fallback): Subtracting {prop_exp} = ${exp_val:,.2f}")
+            
+            # Calculate net rental income
+            net_rental = property_income - property_expenses
+            
+            # Fallback: if L26 is directly provided, use it
+            if "L26" in normalized_inputs and net_rental == 0:
                 net_rental = normalized_inputs["L26"]
+                print(f"  Schedule E (fallback): Using direct L26 = ${net_rental:,.2f}")
+            
+            # PASSIVE LOSS LIMITATIONS: Only flow positive rental income
+            if net_rental > 0:
+                print(f"  Schedule E (fallback): Calculated L26 = ${net_rental:,.2f} (income: ${property_income:,.2f}, expenses: ${property_expenses:,.2f})")
                 return {
                     "outputs": {"L26": net_rental},
-                    "flows": {"Form 1040": {"S1_5": net_rental}},  # Flow directly to Form 1040 with normalized name
+                    "flows": {"Form 1040": {"S1_5": net_rental}},
                 }
+            elif net_rental < 0:
+                # Rental loss - passive loss limitations apply
+                print(f"  Schedule E (fallback): Calculated L26 = ${net_rental:,.2f} (income: ${property_income:,.2f}, expenses: ${property_expenses:,.2f})")
+                print(f"    Passive loss of ${abs(net_rental):,.2f} - suspending (not flowing to Form 1040)")
+                print(f"    Passive losses can only offset passive income, not ordinary income")
+                return {
+                    "outputs": {"L26": net_rental},  # Store the loss for potential future use
+                    "flows": {},  # Don't flow negative losses to Form 1040
+                }
+            
             return {
                 "outputs": {},
                 "flows": {},
@@ -252,16 +341,30 @@ class ScheduleEHandler(FormHandler):
         flows = {}
 
         # Schedule E L26 (Net rental income/loss) flows to Schedule 1, Line 5
-        # Always use the input value if provided (it's the net rental income)
-        # The evaluation might calculate other things, but L26 is what flows to Schedule 1
-        net_rental = normalized_inputs.get("L26", 0)
+        # OTS will calculate L26 from property-specific inputs (4_A, 4_B, 4_C, expenses, etc.)
+        # Prefer OTS's calculated L26 over any direct L26 input (which would be a total)
+        net_rental = outputs.get("L26", 0)
         if not net_rental:
-            # Fall back to output if input not provided
-            net_rental = outputs.get("L26", 0)
+            # Fall back to direct L26 input if OTS didn't calculate it
+            net_rental = normalized_inputs.get("L26", 0)
         
-        if net_rental:
+        # PASSIVE LOSS LIMITATIONS: Rental losses are passive losses and can only offset passive income
+        # If net_rental is negative (a loss), we should only flow it if there's passive income to offset it
+        # For now, we'll only flow positive rental income to Form 1040
+        # Negative rental losses should be suspended (carried forward) unless there's passive income
+        if net_rental > 0:
+            # Flow positive rental income to Form 1040 Schedule 1, Line 5 (S1_5)
             flows["Form 1040"] = {"S1_5": net_rental}
-            print(f"  Schedule E: Flowing L26 (${net_rental}) to Form 1040 as S1_5")
+            print(f"  Schedule E: Flowing L26 (${net_rental:,.2f}) to Form 1040 as S1_5")
+            print(f"    (Calculated from property-specific inputs: {[f'{k}={v}' for k, v in normalized_inputs.items() if k in ['4_A', '4_B', '4_C', '18_A', '18_B', '18_C']]})")
+        elif net_rental < 0:
+            # Rental loss - passive loss limitations apply
+            # TODO: Check for passive income to offset, or apply active participation exception ($25K, subject to AGI phaseouts)
+            # For now, suspend the loss (don't flow it to Form 1040)
+            print(f"  Schedule E: Net rental loss of ${abs(net_rental):,.2f} is a passive loss")
+            print(f"    Passive losses can only offset passive income, not ordinary income")
+            print(f"    Suspending loss (not flowing to Form 1040) - would need passive income or active participation exception")
+            # Don't flow negative rental losses to Form 1040
 
         return {
             "outputs": outputs,
@@ -402,9 +505,16 @@ class ScheduleSEHandler(FormHandler):
         # Get W-2 wages (L1a) from Form 1040 inputs for social security wage base calculation
         # This is critical: if wages already exceed the wage base ($168,600 for 2024),
         # only Medicare tax (2.9%) applies to SE income, not Social Security tax (12.4%)
+        #
+        # IMPORTANT: If Schedule C belongs to the spouse, we must use the spouse's W-2 wages,
+        # not the combined total, because the spouse's wages determine the Social Security wage base
+        # for that spouse's self-employment income.
         form_inputs_dict = context.get("form_inputs", {})
         form_1040_inputs = form_inputs_dict.get("Form 1040", {})
-        w2_wages = form_1040_inputs.get("L1a", 0)
+        combined_w2_wages = form_1040_inputs.get("L1a", 0)
+        
+        # Check if Schedule C belongs to spouse
+        belongs_to_spouse = schedule_c_data.get("belongs_to_spouse", False)
         
         # Normalize inputs
         normalized_inputs = self.normalize_inputs(inputs)
@@ -415,11 +525,82 @@ class ScheduleSEHandler(FormHandler):
             "L2": schedule_c_l31,
         }
         
+        # Determine which W-2 wages to use for L8a
+        w2_wages_to_use = 0
+        
+        if belongs_to_spouse:
+            # Schedule C belongs to spouse - need to extract spouse's W-2 wages from OpenAI inputs
+            # Look for "spouse" + "wage" in OpenAI inputs
+            all_openai_inputs = form_inputs_dict.get("_all_inputs", [])
+            spouse_wages = 0
+            all_l1a_values = []  # Collect all individual L1a values
+            
+            for inp in all_openai_inputs:
+                if inp.get("form") == "Form 1040" and inp.get("line") == "L1a":
+                    fact = inp.get("fact", "").lower() if isinstance(inp.get("fact"), str) else ""
+                    value = inp.get("value", 0)
+                    all_l1a_values.append((value, fact))
+                    
+                    # First priority: explicit "spouse" mention in fact
+                    if "spouse" in fact:
+                        spouse_wages = value
+                        print(f"  Schedule SE: Schedule C belongs to spouse - found spouse's W-2 wages (explicit): ${spouse_wages:,.0f}")
+                        break
+            
+            if spouse_wages == 0 and len(all_l1a_values) > 1:
+                # No explicit "spouse" label found, but we have multiple L1a values
+                # Try to infer: check if any fact mentions "filer" vs "spouse"
+                # If we can identify the filer, the other one is the spouse
+                filer_wages = 0
+                for value, fact in all_l1a_values:
+                    if "filer" in fact and "spouse" not in fact:
+                        filer_wages = value
+                        print(f"  Schedule SE: Found filer's W-2 wages (explicit): ${filer_wages:,.0f}")
+                        break
+                
+                if filer_wages > 0:
+                    # We found the filer's wages - the other value(s) must be spouse's
+                    # If there are exactly 2 values, the non-filer one is spouse's
+                    if len(all_l1a_values) == 2:
+                        for value, fact in all_l1a_values:
+                            if value != filer_wages:
+                                spouse_wages = value
+                                print(f"  Schedule SE: Schedule C belongs to spouse - inferred spouse's W-2 wages: ${spouse_wages:,.0f}")
+                                print(f"    (Inferred: filer has ${filer_wages:,.0f}, so spouse has ${spouse_wages:,.0f})")
+                                break
+                    else:
+                        # More than 2 values - can't safely infer
+                        print(f"  Schedule SE: WARNING - Found filer's wages but {len(all_l1a_values)} total L1a values")
+                        print(f"    Cannot safely infer spouse's wages - using combined (${combined_w2_wages:,.0f})")
+                        spouse_wages = combined_w2_wages
+                else:
+                    # No explicit "filer" or "spouse" labels found - cannot safely infer
+                    # OpenAI prompt should preserve filer/spouse information, so this is unexpected
+                    print(f"  Schedule SE: WARNING - Schedule C belongs to spouse but no explicit filer/spouse labels found")
+                    print(f"    Found {len(all_l1a_values)} L1a values but cannot determine which belongs to spouse")
+                    print(f"    Using combined W-2 wages (${combined_w2_wages:,.0f}) - this may be incorrect!")
+                    print(f"    OpenAI prompt should preserve filer/spouse information in the 'fact' field")
+                    spouse_wages = combined_w2_wages
+            
+            if spouse_wages > 0:
+                w2_wages_to_use = spouse_wages
+            else:
+                # Fallback: if we can't find spouse's wages, use combined (may be incorrect)
+                print(f"  Schedule SE: WARNING - Schedule C belongs to spouse but couldn't find spouse's W-2 wages")
+                print(f"    Using combined W-2 wages (${combined_w2_wages:,.0f}) - this may be incorrect!")
+                w2_wages_to_use = combined_w2_wages
+        else:
+            # Schedule C belongs to filer - use combined W-2 wages (or filer's if we can distinguish)
+            w2_wages_to_use = combined_w2_wages
+        
         # Wages and tips (L8a, L8b, L8c) for social security wage base calculation
-        # Priority: Use L1a from Form 1040 if available, otherwise use direct inputs
-        if w2_wages > 0:
-            se_inputs["L8a"] = w2_wages
-            print(f"  Schedule SE: Using W-2 wages (L1a) from Form 1040: ${w2_wages:,.0f}")
+        # Priority: Use calculated wages above, otherwise use direct inputs
+        if w2_wages_to_use > 0:
+            se_inputs["L8a"] = w2_wages_to_use
+            if belongs_to_spouse:
+                print(f"  Schedule SE: Using spouse's W-2 wages (L8a) for Schedule SE: ${w2_wages_to_use:,.0f}")
+            else:
+                print(f"  Schedule SE: Using W-2 wages (L1a) from Form 1040: ${w2_wages_to_use:,.0f}")
         elif "L8a" in normalized_inputs:
             se_inputs["L8a"] = normalized_inputs["L8a"]
         
@@ -757,6 +938,8 @@ class Form8995Handler(FormHandler):
               f"L11={form_1040_outputs.get('L11')}, L12={form_1040_outputs.get('L12')}")
         agi = form_1040_outputs.get("L11", 0)
         deduction_used = form_1040_outputs.get("L12", 0)
+        print(f"    Form 8995: Using AGI (L11) = ${agi:,.2f}, Deduction (L12) = ${deduction_used:,.2f}")
+        print(f"    Form 8995: Note - AGI should include rental income (S1_5) if present")
         
         # Get Schedule 1 deductions that reduce QBI
         form_1040_inputs = context.get("Form 1040_inputs", {})
@@ -975,7 +1158,14 @@ class Form8995Handler(FormHandler):
             l14 = l13 * qbi_percentage
             l15 = min(l10, l14)  # Final QBI deduction (smaller of L10 and L14)
             
-            print(f"  Form 8995 (manual fallback): QBI deduction = ${l15:,.0f}")
+            print(f"  Form 8995 (manual fallback): QBI deduction calculation:")
+            print(f"    L4 (QBI): ${l4:,.2f}")
+            print(f"    L5 (20% of QBI): ${l5:,.2f}")
+            print(f"    L10 (QBI component): ${l10:,.2f}")
+            print(f"    L11 (AGI - deduction): ${l11:,.2f} = ${agi:,.2f} - ${deduction_used:,.2f}")
+            print(f"    L13 (taxable income before QBI): ${l13:,.2f}")
+            print(f"    L14 (20% of taxable income): ${l14:,.2f}")
+            print(f"    L15 (QBI deduction = min(L10, L14)): ${l15:,.2f}")
             flows = {"Form 1040": {"L13": l15}}
             return {"outputs": {"L15": l15}, "flows": flows}
         finally:

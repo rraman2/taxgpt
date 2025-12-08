@@ -361,13 +361,104 @@
             return '';
         }
 
+        function formatFieldLabel(key) {
+            // Parse key format: "Form 1040 / L1a" or "Schedule C / L31"
+            const parts = key.split(' / ');
+            if (parts.length !== 2) return key; // Fallback if format is unexpected
+            
+            const form = parts[0];
+            const line = parts[1];
+            
+            // Map form names to human-friendly labels
+            const formLabels = {
+                'Form 1040': 'Form 1040',
+                'Schedule C': 'Schedule C',
+                'Schedule E': 'Schedule E',
+                'Schedule A': 'Schedule A',
+                'Schedule D': 'Schedule D',
+                'Form 8812': 'Form 8812',
+                'Schedule SE': 'Schedule SE',
+                'Form 8995': 'Form 8995',
+                'Form 2210': 'Form 2210'
+            };
+            
+            // Map line identifiers to human-friendly labels
+            const lineLabels = {
+                // Form 1040
+                'Status': 'Filing Status',
+                'FilingStatus': 'Filing Status',
+                'Dependents': 'Dependents',
+                'DependentsTable': 'Dependents',
+                'L1a': 'Wages, Salaries, Tips',
+                'L25a': 'Federal Income Tax Withheld',
+                'L26': 'Estimated Tax Payments',
+                'L13': 'Qualified Business Income Deduction',
+                'S1_3': 'Business Income',
+                'S1_5': 'Rental Income',
+                'S1_15': 'Deductible Part of Self-Employment Tax',
+                'S2_4': 'Self-Employment Tax',
+                'A5b': 'Real Estate Taxes',
+                'A8a': 'Home Mortgage Interest',
+                // Schedule C
+                'L31': 'Net Profit or Loss',
+                // Schedule E
+                'L26': 'Net Rental Income or Loss',
+                '4_A': 'Rental Income (Property A)',
+                '4_B': 'Rental Income (Property B)',
+                '4_C': 'Rental Income (Property C)',
+                '18_A': 'Depreciation (Property A)',
+                '18_B': 'Depreciation (Property B)',
+                '18_C': 'Depreciation (Property C)',
+                '19_A': 'Other Expenses (Property A)',
+                '19_B': 'Other Expenses (Property B)',
+                '19_C': 'Other Expenses (Property C)',
+                // Schedule A
+                'L5a': 'Real Estate Taxes',
+                'L8': 'Home Mortgage Interest',
+                'L8a': 'Home Mortgage Interest',
+                // Schedule D
+                'L8h': 'Net Long-Term Capital Gain',
+                'D8h': 'Net Long-Term Capital Gain',
+                'L1h': 'Net Short-Term Capital Gain',
+                'D1h': 'Net Short-Term Capital Gain',
+                'L13': 'Capital Gain Distributions',
+                'D13': 'Capital Gain Distributions',
+                'D11': 'Long-Term Capital Gain',
+                'D4': 'Short-Term Capital Gain',
+                // Form 8812
+                'L4': 'Qualifying Children Under 17',
+                'L4a': 'Qualifying Children Under 17',
+                // Schedule SE
+                'L2': 'Net Profit or Loss',
+                'L8a': 'Wages and Tips',
+                'L8b': 'Unreported Tips',
+                'L8c': 'Wages from Form 8919',
+                // Form 8995
+                'L15': 'Qualified Business Income Deduction',
+                // Form 2210
+                'L1': 'Total Tax',
+                'L2': 'Withholding',
+                'L3': 'Estimated Tax Payments',
+                'L6': 'Required Annual Payment',
+                'L8': 'Annualized Income Installments',
+                'L19': 'Penalty Amount'
+            };
+            
+            // Get human-friendly labels
+            const formLabel = formLabels[form] || form;
+            const lineLabel = lineLabels[line] || line;
+            
+            // Format: "Human Label (Form Name, Line)"
+            return `${lineLabel} (${formLabel}, ${line})`;
+        }
+
         function renderInputs(inputs) {
             if (!inputs || Object.keys(inputs).length === 0) {
                 return '<div style="color: #999; font-style: italic;">No inputs yet</div>';
             }
             return Object.entries(inputs).map(([key, value]) => `
                 <div class="input-item">
-                    <span class="input-label">${key}</span>
+                    <span class="input-label">${formatFieldLabel(key)}</span>
                     <span class="input-value">${formatValue(value)}</span>
                 </div>
             `).join('');
